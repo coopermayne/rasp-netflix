@@ -1,10 +1,17 @@
+var sys = require('sys')
+var exec = require('child_process').exec;
+var child;
 var mongoose = require('mongoose');
 var fs = require('fs');
 var ptn = require('parse-torrent-name');
 var imdb = require('imdb-api');
 var request = require('request');
 var colors = require('colors');
+var inquirer = require('inquirer');
 
+var movie;
+
+var paused = false
 
 //connect to db
 mongoose.connect('mongodb://localhost/boom')
@@ -16,7 +23,7 @@ var movieSchema = mongoose.Schema({
   imdb_id: String,
   ptn_data: {},
   imdb_data: {}
-});
+})
 var Movie = mongoose.model('Movie', movieSchema);
 
 
@@ -59,36 +66,46 @@ function tagEntries() {
     var i=0
     //set interval
     var intId = setInterval(function () {
+      if(paused){return;};
       if(i >= movies.length) {clearInterval(intId); return;}
-      var movie = movies[i]
+      movie = movies[i]
       var ptn = movie.ptn_data
 
-      //construct url
-      var url = 'http://ajax.googleapis.com/ajax/services/search/web?v=1.0&q='
-      url += ptn.title ? "+"+ ptn.title : ""
-      url += ptn.year ? "+"+ ptn.year : ""
-      url += "+site:imdb.com"
-      url = url.replace(/\s/g,'+')
+      //construct query
+      var query = ptn.title
+      query += ptn.year ? " " + ptn.year : ""
+      query += " site:imdb.com"
 
-      console.log(url.grey);
-      request(url, function (err, res, body) {
-        if (err) { throw err; }
-        var json_res = JSON.parse(res.body)
+      console.log('----------------------'.grey + query.grey);
 
-        if (json_res.responseData && json_res.responseData.results[0] && json_res.responseData.results[0].url.match(/tt\d{7}/) ) {
-          movie.imdb_id = json_res.responseData.results[0].url.match(/tt\d{7}/)[0]
+      child = exec('casperjs casper.js \'' + query + '\'', function(error, stdout, stderr){
+
+        if(stdout.match(/tt\d{7}/)){
+
+          movie.imdb_id = stdout.match(/tt\d{7}/)[0]
+
           movie.save(function(){
-            //get the data from imdb....
             oneIMDB(movie.imdb_id);
-            console.log("saved: " + movie.imdb_id.green)
+            console.log("saved: " + movie.imdb_id.green);
           })
+
         } else {
-          console.log(res.body);
+          inq(function(res){
+            var pass = res.match(/tt\d{7}/);
+            if(!pass){return;}
+
+            movie.imdb_id = res
+
+            movie.save(function(){
+              oneIMDB(movie.imdb_id);
+              console.log("saved: " + movie.imdb_id.green);
+            })
+          })
         }
       })
 
       i++
-    }, 20000)
+    }, 5000)
   })
 }
 
@@ -103,34 +120,48 @@ function oneIMDB(imdb_id) {
         var json_res = JSON.parse(res.body);
 
         movie.imdb_data = json_res;
-        movie.save(function(){ console.log("imdb data saved: " + movie.imdb_data.Title)})
+        movie.save(function(){ console.log("imdb data saved: " + movie.imdb_data.Title + ', ' + movie.imdb_data.Year)})
       })
     }
   })
 }
 
-function allIMDB() {
-  //find docs with imdb_id but no data -- 
-  Movie.find({ imdb_id: { $ne: null }, imdb_data: null }, function(err, movies){
-    //fill in their data...
+function inq(callback) {
+  paused = true
+  question = {
+    type: "input",
+    name: "imdb_id",
+    message: "imdb?",
+  }
 
-    var i = 0;
-    var intId = setInterval(function () {
-      if(i >= movies.length) {return;}
-      console.log(movies.length);
-      if(i>movies.length) {clearInterval(intId)};
-      var movie = movies[i];
-      var url = "http://www.omdbapi.com/?i="+movie.imdb_id+"&plot=full&r=json&tomatoes=true"
-
-      request(url, function(err, res, body){
-        if(err) throw err;
-        var json_res = JSON.parse(res.body);
-
-        movie.imdb_data = json_res;
-        movie.save(function(){ console.log("imdb data saved: " + movie.imdb_data.Title)})
-      })
-
-      i++
-    }, 1000)
-  }) 
+  inquirer.prompt(question, function(answer){
+    paused = false
+    callback(answer.imdb_id);
+  })
 }
+
+//function allIMDB() {
+  ////find docs with imdb_id but no data -- 
+  //Movie.find({ imdb_id: { $ne: null }, imdb_data: null }, function(err, movies){
+    ////fill in their data...
+
+    //var i = 0;
+    //var intId = setInterval(function () {
+      //if(i >= movies.length) {return;}
+      //console.log(movies.length);
+      //if(i>movies.length) {clearInterval(intId)};
+      //var movie = movies[i];
+      //var url = "http://www.omdbapi.com/?i="+movie.imdb_id+"&plot=full&r=json&tomatoes=true"
+
+      //request(url, function(err, res, body){
+        //if(err) throw err;
+        //var json_res = JSON.parse(res.body);
+
+        //movie.imdb_data = json_res;
+        //movie.save(function(){ console.log("imdb data saved: " + movie.imdb_data.Title)})
+      //})
+
+      //i++
+    //}, 1000)
+  //}) 
+//}
