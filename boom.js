@@ -54,31 +54,30 @@ db.once('open', function (callback) {
       })
     }
 
-    asyncLoop(0, getIMDB)
+    asyncLoop(0, getMovieData)
   });
 });
 
-function getIMDB() {
+function getMovieData() {
   Movie.find({ imdb_id: null, 'ptn_data.title':{$ne:null} }, function (err, movies) {
     console.log("todo: " + movies.length);
 
     function aloop(i, callback) {
-      
       if(i >= movies.length){return callback()}
-      var movie = movies[i]
 
+      var movie = movies[i]
       var ptn = movie.ptn_data
+
       async.series([
+
         function(next){
-          //try scraping kat.cr
+          // TRY SCRAPING KAT.CR
           var query = movie.file.replace('\.torrent', '')
-          console.log('----------------------'.grey + query.grey);
+          console.log('KAT: '.grey + query.grey);
 
           child = exec('ruby searchKat.rb \'' + query + '\'', function(error, stdout, stderr){
             if(stdout.match(/tt\d{7}/)){
-
               movie.imdb_id = stdout.match(/tt\d{7}/)[0]
-
               movie.save(function(){
                 console.log("saved: " + movie.imdb_id.green);
                 next(null, true)
@@ -87,10 +86,11 @@ function getIMDB() {
               next(null, false)
             }
           })
+
         },
 
         function(next){
-          //try scraping google (if kat didn't work...)
+          // TRY SCRAPING GOOGLE (IF KAT DIDN'T WORK...)
           if(movie.imdb_id){return next(null, false)}
 
           //construct query
@@ -98,9 +98,9 @@ function getIMDB() {
           query += ptn.year ? " " + ptn.year : ""
           query += " site:imdb.com"
 
-          console.log('----------------------'.grey + query.grey);
+          console.log('GOOGLE: '.grey + query.grey);
 
-          child = exec('casperjs casper.js \'' + query + '\'', function(error, stdout, stderr){
+          child = exec('casperjs searchGoogle.js \'' + query + '\'', function(error, stdout, stderr){
 
             if(stdout.match(/tt\d{7}/)){
 
@@ -119,140 +119,45 @@ function getIMDB() {
 
         function(next){
           //look up imdb data (if there is an id)
-          if(!movie.imdb_id){ return next(null, false); }
+          if(!movie.imdb_id){ 
+            console.log("didn't find imdb id".red);
+            return next(null, false); 
+          }
 
-          var url = "http://www.omdbapi.com/?i="+movie.imdb_id+"&plot=full&r=json&tomatoes=true"
+          query = movie.imdb_id
 
-          request(url, function(err, res, body){
-            if(err) throw err;
-            var json_res = JSON.parse(res.body);
-
-            movie.imdb_data = json_res;
-            movie.save(function(){
-              console.log("imdb data saved: " + movie.imdb_data.Title + ', ' + movie.imdb_data.Year)
-              next(null, true)
-            })
+          child = exec('ruby imdb.rb ' + query, function(error, stdout, stderr){
+            if(error){ throw error; }
+            if(stdout){
+              movie.imdb_data = JSON.parse(stdout);
+              movie.save(function(){
+                var msg = movie.imdb_data.title
+                msg += " (" + movie.imdb_data.year + ")"
+                console.log('saved: ' + msg.green)
+                next(null, false)
+              })
+            } else{
+              console.log('no response!'.red);
+              next(null, false)
+            }
           })
+
         },
 
         function(next){
           //pause before next
           setTimeout(function(){
             next(null, true);
-          }, 5000)
+          }, 10000)
         }
       ], function(err, result){
         console.log(result);
         aloop(i+1, callback)
       })
   }
+  // END aloop def
+
   aloop(0, function(){ console.log('done'); })
 
   })
 }
-
-function tagEntries() {
-  Movie.find({ imdb_id: null, 'ptn_data.title':{$ne:null} }, function (err, movies) {
-    console.log("todo: " + movies.length);
-    //set starting point...
-    var i=0
-    //set interval
-    var intId = setInterval(function () {
-      if(i >= movies.length) {clearInterval(intId); return;}
-      movie = movies[i]
-      var ptn = movie.ptn_data
-
-      //construct query
-      var query = ptn.title
-      query += ptn.year ? " " + ptn.year : ""
-      query += " site:imdb.com"
-
-      console.log('----------------------'.grey + query.grey);
-
-      child = exec('casperjs casper.js \'' + query + '\'', function(error, stdout, stderr){
-
-        if(stdout.match(/tt\d{7}/)){
-
-          movie.imdb_id = stdout.match(/tt\d{7}/)[0]
-
-          movie.save(function(){
-            oneIMDB(movie.imdb_id);
-            console.log("saved: " + movie.imdb_id.green);
-          })
-
-        } else {
-          //inq(function(res){
-            //var pass = res.match(/tt\d{7}/);
-            //if(!pass){return;}
-
-            //movie.imdb_id = res
-
-            //movie.save(function(){
-              //oneIMDB(movie.imdb_id);
-              //console.log("saved: " + movie.imdb_id.green);
-            //})
-          //})
-        }
-      })
-
-      i++
-    }, 5000)
-  })
-}
-
-function oneIMDB(imdb_id) {
-  Movie.findOne({imdb_id: imdb_id}, function(err, movie){
-    if(err) {throw err}
-    if(movie){
-      var url = "http://www.omdbapi.com/?i="+imdb_id+"&plot=full&r=json&tomatoes=true"
-
-      request(url, function(err, res, body){
-        if(err) throw err;
-        var json_res = JSON.parse(res.body);
-
-        movie.imdb_data = json_res;
-        movie.save(function(){ console.log("imdb data saved: " + movie.imdb_data.Title + ', ' + movie.imdb_data.Year)})
-      })
-    }
-  })
-}
-
-function inq(callback) {
-  paused = true
-  question = {
-    type: "input",
-    name: "imdb_id",
-    message: "imdb?",
-  }
-
-  inquirer.prompt(question, function(answer){
-    paused = false
-    callback(answer.imdb_id);
-  })
-}
-
-//function allIMDB() {
-  ////find docs with imdb_id but no data -- 
-  //Movie.find({ imdb_id: { $ne: null }, imdb_data: null }, function(err, movies){
-    ////fill in their data...
-
-    //var i = 0;
-    //var intId = setInterval(function () {
-      //if(i >= movies.length) {return;}
-      //console.log(movies.length);
-      //if(i>movies.length) {clearInterval(intId)};
-      //var movie = movies[i];
-      //var url = "http://www.omdbapi.com/?i="+movie.imdb_id+"&plot=full&r=json&tomatoes=true"
-
-      //request(url, function(err, res, body){
-        //if(err) throw err;
-        //var json_res = JSON.parse(res.body);
-
-        //movie.imdb_data = json_res;
-        //movie.save(function(){ console.log("imdb data saved: " + movie.imdb_data.Title)})
-      //})
-
-      //i++
-    //}, 1000)
-  //}) 
-//}
