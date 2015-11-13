@@ -8,8 +8,7 @@ var imdb = require('imdb-api');
 var request = require('request');
 var colors = require('colors');
 var inquirer = require('inquirer');
-
-var movie;
+var async = require('async');
 
 var paused = false
 
@@ -55,9 +54,102 @@ db.once('open', function (callback) {
       })
     }
 
-    asyncLoop(0, tagEntries)
+    asyncLoop(0, getIMDB)
   });
 });
+
+function getIMDB() {
+  Movie.find({ imdb_id: null, 'ptn_data.title':{$ne:null} }, function (err, movies) {
+    console.log("todo: " + movies.length);
+
+    function aloop(i, callback) {
+      
+      if(i >= movies.length){return callback()}
+      var movie = movies[i]
+
+      var ptn = movie.ptn_data
+      async.series([
+        function(next){
+          //try scraping kat.cr
+          var query = movie.file.replace('\.torrent', '')
+          console.log('----------------------'.grey + query.grey);
+
+          child = exec('ruby searchKat.rb \'' + query + '\'', function(error, stdout, stderr){
+            if(stdout.match(/tt\d{7}/)){
+
+              movie.imdb_id = stdout.match(/tt\d{7}/)[0]
+
+              movie.save(function(){
+                console.log("saved: " + movie.imdb_id.green);
+                next(null, true)
+              })
+            } else {
+              next(null, false)
+            }
+          })
+        },
+
+        function(next){
+          //try scraping google (if kat didn't work...)
+          if(movie.imdb_id){return next(null, false)}
+
+          //construct query
+          var query = ptn.title
+          query += ptn.year ? " " + ptn.year : ""
+          query += " site:imdb.com"
+
+          console.log('----------------------'.grey + query.grey);
+
+          child = exec('casperjs casper.js \'' + query + '\'', function(error, stdout, stderr){
+
+            if(stdout.match(/tt\d{7}/)){
+
+              movie.imdb_id = stdout.match(/tt\d{7}/)[0]
+
+              movie.save(function(){
+                console.log("saved: " + movie.imdb_id.green);
+                next(null, true)
+              })
+            } else {
+              next(null, false)
+            }
+          })
+
+        },
+
+        function(next){
+          //look up imdb data (if there is an id)
+          if(!movie.imdb_id){ return next(null, false); }
+
+          var url = "http://www.omdbapi.com/?i="+movie.imdb_id+"&plot=full&r=json&tomatoes=true"
+
+          request(url, function(err, res, body){
+            if(err) throw err;
+            var json_res = JSON.parse(res.body);
+
+            movie.imdb_data = json_res;
+            movie.save(function(){
+              console.log("imdb data saved: " + movie.imdb_data.Title + ', ' + movie.imdb_data.Year)
+              next(null, true)
+            })
+          })
+        },
+
+        function(next){
+          //pause before next
+          setTimeout(function(){
+            next(null, true);
+          }, 5000)
+        }
+      ], function(err, result){
+        console.log(result);
+        aloop(i+1, callback)
+      })
+  }
+  aloop(0, function(){ console.log('done'); })
+
+  })
+}
 
 function tagEntries() {
   Movie.find({ imdb_id: null, 'ptn_data.title':{$ne:null} }, function (err, movies) {
@@ -66,7 +158,6 @@ function tagEntries() {
     var i=0
     //set interval
     var intId = setInterval(function () {
-      if(paused){return;};
       if(i >= movies.length) {clearInterval(intId); return;}
       movie = movies[i]
       var ptn = movie.ptn_data
@@ -90,17 +181,17 @@ function tagEntries() {
           })
 
         } else {
-          inq(function(res){
-            var pass = res.match(/tt\d{7}/);
-            if(!pass){return;}
+          //inq(function(res){
+            //var pass = res.match(/tt\d{7}/);
+            //if(!pass){return;}
 
-            movie.imdb_id = res
+            //movie.imdb_id = res
 
-            movie.save(function(){
-              oneIMDB(movie.imdb_id);
-              console.log("saved: " + movie.imdb_id.green);
-            })
-          })
+            //movie.save(function(){
+              //oneIMDB(movie.imdb_id);
+              //console.log("saved: " + movie.imdb_id.green);
+            //})
+          //})
         }
       })
 
